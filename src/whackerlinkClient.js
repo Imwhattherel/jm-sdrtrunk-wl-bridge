@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import crypto from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 
 const PacketType = {
   AUDIO_DATA: 0x01,
@@ -208,9 +209,8 @@ export class WhackerLinkClient {
   this.voiceChannel = null;
 }
 
-async transmitPcmChunks(pcmChunkAsyncIterable) {
+async transmitPcmChunks(pcmChunkAsyncIterable, { sampleRate = 8000 } = {}) {
   await this.ensureRegisteredAndAffiliated();
-
   const grantedChannel = await this.requestVoiceChannel();
 
   const vch = {
@@ -222,6 +222,8 @@ async transmitPcmChunks(pcmChunkAsyncIterable) {
     Site: this.site,
   };
 
+  this.ws?._socket?.setNoDelay?.(true);
+
   const watchdogMs = 60000;
   let watchdog = null;
   let aborted = false;
@@ -230,9 +232,23 @@ async transmitPcmChunks(pcmChunkAsyncIterable) {
     clearTimeout(watchdog);
     watchdog = setTimeout(() => {
       aborted = true;
-      console.log('[TX] watchdog abort + release');
+      console.log("[TX] watchdog abort + release");
       this.releaseVoiceChannel(grantedChannel).catch(() => {});
     }, watchdogMs);
+  };
+
+  const bytesPerSample = 2;
+  let t0 = performance.now();
+  let nextSendAt = t0;
+
+  const sleepUntil = async (msTarget) => {
+    while (true) {
+      const now = performance.now();
+      const diff = msTarget - now;
+      if (diff <= 0) return;
+      if (diff > 5) await sleep(Math.min(10, diff - 2));
+      else await sleep(1);
+    }
   };
 
   armWatchdog();
@@ -241,30 +257,35 @@ async transmitPcmChunks(pcmChunkAsyncIterable) {
     for await (const chunk of pcmChunkAsyncIterable) {
       if (aborted) break;
 
-      // backpressure guard
       while (this.ws.bufferedAmount > 2 * 1024 * 1024) {
         await sleep(5);
       }
 
+      const samples = Math.floor(chunk.length / bytesPerSample);
+      const durationMs = (samples / sampleRate) * 1000;
+
+      await sleepUntil(nextSendAt);
+
       this.#send(PacketType.AUDIO_DATA, {
         LopServerVocode: true,
-        Data: chunk.toString('base64'),
+        Data: chunk.toString("base64"),
         VoiceChannel: vch,
         AudioMode: AudioMode.PCM_8_16,
         Site: this.site,
       });
 
+      nextSendAt += durationMs;
       armWatchdog();
-      await sleep(40);
     }
 
     await sleep(200);
   } finally {
     clearTimeout(watchdog);
-    console.log('[TX] final release');
+    console.log("[TX] final release");
     await this.releaseVoiceChannel(grantedChannel).catch(() => {});
-    console.log('[TX] done');
+    console.log("[TX] done");
   }
 }
+
 }
 
