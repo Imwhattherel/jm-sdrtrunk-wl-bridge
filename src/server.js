@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 
 import {config} from './config.js';
 import { TxQueue } from './txQueue.js';
-import { WhackerLinkClient } from './whackerLinkClient.js';
+import { WhackerLinkClient } from './whackerlinkClient.js';
 import { mp3ToPcm8k16MonoChunks } from './audio.js';
 
 const app = express();
