@@ -1,0 +1,5 @@
+curl http://localhost:4010/api/call-upload \
+  -F "audio=@/c/Users/YourUser/Downloads/testaudio.wav" \
+  -F "system=1" \
+  -F "talkgroup=1501" \
+  -F "key=supercalifragilisticexpialidocious"
