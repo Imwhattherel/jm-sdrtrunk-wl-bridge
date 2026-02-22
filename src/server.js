@@ -151,7 +151,7 @@ const wl = new WhackerLinkClient({
   authKey: config.wl.authKey,
   srcId: config.wl.srcId,
   sysId: config.wl.sysId,
-  talkgroup: config.wl.talkgroup,
+  talkgroup: config.wl.talkgroup, // this is now just initial/default
   siteConfig: {
     name: process.env.WL_SITE_NAME,
     siteId: process.env.WL_SITE_ID,
@@ -216,16 +216,54 @@ app.post('/api/call-upload', upload.any(), async (req, res) => {
       req.body?.system ?? req.body?.systemId ?? req.body?.sysId ?? config.wl.sysId
     );
 
-    const freqMap = parseFreqMap(process.env.FREQ_MAP);
-    const defaultTg = String(process.env.FREQ_MAP_DEFAULT_TG ?? config.wl.talkgroup);
-    const toleranceKhz = Number(process.env.FREQ_MAP_TOLERANCE_KHZ ?? 3);
+    // ────────────────────────────────────────────────────────────────
+    // MAIN CHANGE: Pull talkgroup from request first (SDRTrunk/Rdio style)
+    // ────────────────────────────────────────────────────────────────
+    let talkgroup = req.body?.talkgroup ?? req.body?.Talkgroup ?? req.body?.tg ?? null;
 
-    const freqMhz = pickFrequencyMhz(req.body);
-    const talkgroup = mapFreqToTalkgroup(freqMhz, freqMap, toleranceKhz, defaultTg);
+    if (talkgroup != null) {
+      talkgroup = String(talkgroup).trim();
+      if (!/^\d+$/.test(talkgroup)) {
+        talkgroup = null; // invalid format → fallback
+      }
+    }
+
+    let resolutionMethod = 'request';
+
+    if (!talkgroup) {
+      // Fallback 1: frequency-based mapping
+      const freqMap = parseFreqMap(process.env.FREQ_MAP);
+      const defaultTg = String(process.env.FREQ_MAP_DEFAULT_TG ?? config.wl.talkgroup);
+      const toleranceKhz = Number(process.env.FREQ_MAP_TOLERANCE_KHZ ?? 3);
+
+      const freqMhz = pickFrequencyMhz(req.body);
+      talkgroup = mapFreqToTalkgroup(freqMhz, freqMap, toleranceKhz, defaultTg);
+
+      if (talkgroup !== defaultTg) {
+        resolutionMethod = 'frequency_map';
+      } else {
+        resolutionMethod = 'default_fallback';
+      }
+    }
+
+    // Final safety net (should be rare)
+    if (!talkgroup) {
+      talkgroup = config.wl.talkgroup;
+      resolutionMethod = 'config_default';
+      log.warn({ tag: 'MAP', rid: req._rid }, 'No talkgroup resolved → using static config default');
+    }
 
     log.info(
-      { tag: 'MAP', rid: req._rid, freqRaw: req.body?.frequency, freqMhz, talkgroup, sysId },
-      'frequency mapped'
+      {
+        tag: 'MAP',
+        rid: req._rid,
+        freqRaw: req.body?.frequency ?? req.body?.freq,
+        freqMhz: pickFrequencyMhz(req.body),
+        talkgroup,
+        sysId,
+        resolution: resolutionMethod,
+      },
+      'talkgroup resolved'
     );
 
     const audioPath = file.path;
